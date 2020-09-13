@@ -1,12 +1,12 @@
-# Automagically pick clang or gcc, with preference for clang
+# Automagically pick CLANG or RH/CentOS newer GCC if present
 # This is only done if we have not overridden these with an environment or CLI variable
 ifeq ($(origin CC),default)
-	CC:=$(shell if [ -e /usr/bin/clang ]; then echo clang; else echo gcc; fi)
-	CC:=$(shell if [ -e /opt/intel/bin/icc ]; then echo /opt/intel/bin/icc -ipo -ansi-alias; else echo $(CC); fi)
+        CC:=$(shell if [ -e /usr/bin/clang ]; then echo clang; else echo gcc; fi)
+        CC:=$(shell if [ -e /opt/rh/devtoolset-8/root/usr/bin/gcc ]; then echo /opt/rh/devtoolset-8/root/usr/bin/gcc; else echo $(CC); fi)
 endif
 ifeq ($(origin CXX),default)
-	CXX:=$(shell if [ -e /usr/bin/clang++ ]; then echo clang++; else echo g++; fi)
-	CXX:=$(shell if [ -e /opt/intel/bin/icc ]; then echo /opt/intel/bin/icc -ipo -ansi-alias; else echo $(CXX); fi)
+        CXX:=$(shell if [ -e /usr/bin/clang++ ]; then echo clang++; else echo g++; fi)
+        CXX:=$(shell if [ -e /opt/rh/devtoolset-8/root/usr/bin/g++ ]; then echo /opt/rh/devtoolset-8/root/usr/bin/g++; else echo $(CXX); fi)
 endif
 
 INCLUDES?=
@@ -14,9 +14,12 @@ DEFS?=
 LDLIBS?=
 DESTDIR?=
 
-
 include objects.mk
 ONE_OBJS+=osdep/LinuxEthernetTap.o
+ONE_OBJS+=osdep/LinuxNetLink.o
+
+# for central controller builds
+TIMESTAMP=$(shell date +"%Y%m%d%H%M")
 
 # Auto-detect miniupnpc and nat-pmp as well and use system libs if present,
 # otherwise build into binary as done on Mac and Windows.
@@ -42,8 +45,15 @@ endif
 # Trying to use dynamically linked libhttp-parser causes tons of compatibility problems.
 ONE_OBJS+=ext/http-parser/http_parser.o
 
+# Build with address sanitization library for advanced debugging (clang)
+ifeq ($(ZT_SANITIZE),1)
+	DEFS+=-fsanitize=address -DASAN_OPTIONS=symbolize=1
+endif
+ifeq ($(ZT_DEBUG_TRACE),1)
+	DEFS+=-DZT_DEBUG_TRACE
+endif
 ifeq ($(ZT_TRACE),1)
-	override DEFS+=-DZT_TRACE
+	DEFS+=-DZT_TRACE
 endif
 
 ifeq ($(ZT_RULES_ENGINE_DEBUGGING),1)
@@ -82,12 +92,21 @@ ifeq ($(ZT_SYNOLOGY), 1)
 	override DEFS+=-D__SYNOLOGY__
 endif
 
+ifeq ($(ZT_DISABLE_COMPRESSION), 1)
+	override DEFS+=-DZT_DISABLE_COMPRESSION
+endif
+
 ifeq ($(ZT_TRACE),1)
 	override DEFS+=-DZT_TRACE
 endif
 
 ifeq ($(ZT_USE_TEST_TAP),1)
 	override DEFS+=-DZT_USE_TEST_TAP
+endif
+
+ifeq ($(ZT_VAULT_SUPPORT),1)
+	override DEFS+=-DZT_VAULT_SUPPORT=1
+	override LDLIBS+=-lcurl
 endif
 
 # Uncomment for gprof profile build
@@ -156,6 +175,11 @@ ifeq ($(CC_MACH),armv6)
 	override DEFS+=-DZT_NO_TYPE_PUNNING
 	ZT_USE_ARM32_NEON_ASM_CRYPTO=1
 endif
+ifeq ($(CC_MACH),armv6l)
+	ZT_ARCHITECTURE=3
+	override DEFS+=-DZT_NO_TYPE_PUNNING
+	ZT_USE_ARM32_NEON_ASM_CRYPTO=1
+endif
 ifeq ($(CC_MACH),armv6zk)
 	ZT_ARCHITECTURE=3
 	override DEFS+=-DZT_NO_TYPE_PUNNING
@@ -176,10 +200,10 @@ ifeq ($(CC_MACH),armv7l)
 	override DEFS+=-DZT_NO_TYPE_PUNNING
 	ZT_USE_ARM32_NEON_ASM_CRYPTO=1
 endif
-ifeq ($(CC_MACH),armv7l)
-        ZT_ARCHITECTURE=3
+ifeq ($(CC_MACH),armv7hl)
+	ZT_ARCHITECTURE=3
 	override DEFS+=-DZT_NO_TYPE_PUNNING
-	ZT_USE_ARM32_NEON_ASM_SALSA2012=1
+	ZT_USE_ARM32_NEON_ASM_CRYPTO=1
 endif
 ifeq ($(CC_MACH),arm64)
 	ZT_ARCHITECTURE=4
@@ -204,6 +228,9 @@ endif
 ifeq ($(CC_MACH),mips64el)
 	ZT_ARCHITECTURE=6
 	override DEFS+=-DZT_NO_TYPE_PUNNING
+endif
+ifeq ($(CC_MACH),s390x)
+	ZT_ARCHITECTURE=16
 endif
 
 # Fail if system architecture could not be determined
@@ -237,8 +264,8 @@ ifeq ($(ZT_ARCHITECTURE),3)
 		override CXXFLAGS+=-march=armv5 -mfloat-abi=soft -msoft-float -mno-unaligned-access -marm
 		ZT_USE_ARM32_NEON_ASM_CRYPTO=0
 	else
-		override CFLAGS+=-march=armv5 -mno-unaligned-access -marm
-		override CXXFLAGS+=-march=armv5 -mno-unaligned-access -marm
+		override CFLAGS+=-march=armv5 -mno-unaligned-access -marm -fexceptions
+		override CXXFLAGS+=-march=armv5 -mno-unaligned-access -marm -fexceptions
 		ZT_USE_ARM32_NEON_ASM_CRYPTO=0
 	endif
 endif
@@ -257,19 +284,21 @@ ifeq ($(ZT_USE_ARM32_NEON_ASM_CRYPTO),1)
 	override CORE_OBJS+=ext/arm32-neon-salsa2012-asm/salsa2012.o
 endif
 
+.PHONY: all
 all:	one
 
-one:	$(CORE_OBJS) $(ONE_OBJS) one.o
+.PHONY: one
+one: zerotier-one zerotier-idtool zerotier-cli
+
+zerotier-one:	$(CORE_OBJS) $(ONE_OBJS) one.o
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o zerotier-one $(CORE_OBJS) $(ONE_OBJS) one.o $(LDLIBS)
 	$(STRIP) zerotier-one
+
+zerotier-idtool: zerotier-one
 	ln -sf zerotier-one zerotier-idtool
+
+zerotier-cli: zerotier-one
 	ln -sf zerotier-one zerotier-cli
-
-zerotier-one: one
-
-zerotier-idtool: one
-
-zerotier-cli: one
 
 libzerotiercore.a:	FORCE
 	make CFLAGS="-O3 -fstack-protector -fPIC" CXXFLAGS="-O3 -std=c++11 -fstack-protector -fPIC" $(CORE_OBJS)
@@ -290,7 +319,7 @@ manpages:	FORCE
 doc:	manpages
 
 clean: FORCE
-	rm -rf *.a *.so *.o node/*.o controller/*.o osdep/*.o service/*.o ext/http-parser/*.o ext/miniupnpc/*.o ext/libnatpmp/*.o $(CORE_OBJS) $(ONE_OBJS) zerotier-one zerotier-idtool zerotier-cli zerotier-selftest build-* ZeroTierOneInstaller-* *.deb *.rpm .depend debian/files debian/zerotier-one*.debhelper debian/zerotier-one.substvars debian/*.log debian/zerotier-one doc/node_modules ext/misc/*.o debian/.debhelper debian/debhelper-build-stamp
+	rm -rf *.a *.so *.o node/*.o controller/*.o osdep/*.o service/*.o ext/http-parser/*.o ext/miniupnpc/*.o ext/libnatpmp/*.o $(CORE_OBJS) $(ONE_OBJS) zerotier-one zerotier-idtool zerotier-cli zerotier-selftest build-* ZeroTierOneInstaller-* *.deb *.rpm .depend debian/files debian/zerotier-one*.debhelper debian/zerotier-one.substvars debian/*.log debian/zerotier-one doc/node_modules ext/misc/*.o debian/.debhelper debian/debhelper-build-stamp docker/zerotier-one
 
 distclean:	clean
 
@@ -299,9 +328,14 @@ realclean:	distclean
 official:	FORCE
 	make -j4 ZT_OFFICIAL=1 all
 
+docker:	FORCE
+	docker build -f ext/installfiles/linux/zerotier-containerized/Dockerfile -t zerotier-containerized .
+
 central-controller:	FORCE
-	cd ext/librethinkdbxx ; make
-	make -j4 LDLIBS="ext/librethinkdbxx/build/librethinkdb++.a" DEFS="-DZT_CONTROLLER_USE_RETHINKDB" ZT_OFFICIAL=1 ZT_USE_X64_ASM_ED25519=1 one
+	make -j4 LDLIBS="-L/usr/pgsql-10/lib/ -lpq -Lext/librabbitmq/centos_x64/lib/ -lrabbitmq" CXXFLAGS="-I/usr/pgsql-10/include -I./ext/librabbitmq/centos_x64/include -fPIC" DEFS="-DZT_CONTROLLER_USE_LIBPQ -DZT_CONTROLLER" ZT_OFFICIAL=1 ZT_USE_X64_ASM_ED25519=1 one
+
+central-controller-docker: FORCE
+	docker build -t docker.zerotier.com/zerotier-central/ztcentral-controller:${TIMESTAMP} -f ext/central-controller-docker/Dockerfile --build-arg git_branch=`git name-rev --name-only HEAD` .
 
 debug:	FORCE
 	make ZT_DEBUG=1 one
@@ -356,12 +390,19 @@ uninstall:	FORCE
 # These are just for convenience for building Linux packages
 
 debian:	FORCE
-	debuild -I -i -us -uc -nc -b
+	debuild --no-lintian -I -i -us -uc -nc -b 
 
 debian-clean: FORCE
 	rm -rf debian/files debian/zerotier-one*.debhelper debian/zerotier-one.substvars debian/*.log debian/zerotier-one debian/.debhelper debian/debhelper-build-stamp
 
 redhat:	FORCE
-	rpmbuild -ba zerotier-one.spec
+	rpmbuild --target `rpm -q bash --qf "%{arch}"` -ba zerotier-one.spec
+
+# This installs the packages needed to build ZT locally on CentOS 7 and
+# is here largely for documentation purposes.
+centos-7-setup: FORCE
+	yum install -y gcc gcc-c++ make epel-release git
+	yum install -y centos-release-scl
+	yum install -y devtoolset-8-gcc devtoolset-8-gcc-c++
 
 FORCE:

@@ -1,28 +1,15 @@
 /*
- * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (c)2019 ZeroTier, Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file in the project's root directory.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Change Date: 2023-01-01
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- * --
- *
- * You can be released from the requirements of the license by purchasing
- * a commercial license. Buying such a license is mandatory as soon as you
- * develop commercial closed-source software that incorporates or links
- * directly against ZeroTier software without disclosing the source code
- * of your own application.
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2.0 of the Apache License.
  */
+/****/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -670,52 +657,6 @@ static int testOther()
 	std::cout << std::endl;
 
 #if 0
-	std::cout << "[other] Benchmarking memcpy... "; std::cout.flush();
-	{
-		unsigned char *bb = (unsigned char *)::malloc(1234567);
-		unsigned char *cc = (unsigned char *)::malloc(1234567);
-		for(unsigned int i=0;i<1234567;++i)
-			bb[i] = (unsigned char)i;
-		double bytes = 0.0;
-		uint64_t start = OSUtils::now();
-		for(unsigned int i=0;i<20000;++i) {
-			++bb[i];
-			++bb[i+1];
-			memcpy(cc,bb,1234567);
-			bytes += 1234567.0;
-		}
-		if (cc[0] != bb[0])
-			abort();
-		uint64_t end = OSUtils::now();
-		std::cout << ((bytes / 1048576.0) / ((long double)(end - start) / 1024.0)) << " MiB/second" << std::endl;
-		::free((void *)bb);
-		::free((void *)cc);
-	}
-#endif
-
-	std::cout << "[other] Benchmarking ZT_FAST_MEMCPY... "; std::cout.flush();
-	{
-		unsigned char *bb = (unsigned char *)::malloc(1234567);
-		unsigned char *cc = (unsigned char *)::malloc(1234567);
-		for(unsigned int i=0;i<1234567;++i)
-			bb[i] = (unsigned char)i;
-		double bytes = 0.0;
-		uint64_t start = OSUtils::now();
-		for(unsigned int i=0;i<20000;++i) {
-			++bb[0];
-			++bb[1234566];
-			ZT_FAST_MEMCPY(cc,bb,1234567);
-			bytes += 1234567.0;
-		}
-		if (cc[0] != bb[0])
-			abort();
-		uint64_t end = OSUtils::now();
-		std::cout << ((bytes / 1048576.0) / ((long double)(end - start) / 1024.0)) << " MiB/second" << std::endl;
-		::free((void *)bb);
-		::free((void *)cc);
-	}
-
-#if 0
 	std::cout << "[other] Testing Hashtable... "; std::cout.flush();
 	{
 		Hashtable<uint64_t,std::string> ht;
@@ -999,7 +940,7 @@ struct TestPhyHandlers
 	inline void phyOnUnixAccept(PhySocket *sockL,PhySocket *sockN,void **uptrL,void **uptrN) {}
 	inline void phyOnUnixClose(PhySocket *sock,void **uptr) {}
 	inline void phyOnUnixData(PhySocket *sock,void **uptr,void *data,unsigned long len) {}
-	inline void phyOnUnixWritable(PhySocket *sock,void **uptr,bool b) {}
+	inline void phyOnUnixWritable(PhySocket *sock,void **uptr) {}
 #endif // __UNIX_LIKE__
 
 	inline void phyOnFileDescriptorActivity(PhySocket *sock,void **uptr,bool readable,bool writable) {}

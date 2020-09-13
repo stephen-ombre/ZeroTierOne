@@ -1,28 +1,15 @@
 /*
- * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (c)2019 ZeroTier, Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file in the project's root directory.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Change Date: 2023-01-01
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- * --
- *
- * You can be released from the requirements of the license by purchasing
- * a commercial license. Buying such a license is mandatory as soon as you
- * develop commercial closed-source software that incorporates or links
- * directly against ZeroTier software without disclosing the source code
- * of your own application.
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2.0 of the Apache License.
  */
+/****/
 
 /*
  * This defines the external C API for ZeroTier's core network virtualization
@@ -102,10 +89,11 @@ extern "C" {
 /**
  * Default UDP payload size (physical path MTU) not including UDP and IP overhead
  *
- * This is 1500 - IPv6 UDP overhead - PPPoE overhead and is safe for 99.9% of
- * all Internet links.
+ * This is small enough for PPPoE and for Google Cloud's bizarrely tiny MTUs.
+ * A 2800 byte payload still fits into two packets, so this should not impact
+ * real world throughput at all vs the previous default of 1444.
  */
-#define ZT_DEFAULT_PHYSMTU 1444
+#define ZT_DEFAULT_PHYSMTU 1432
 
 /**
  * Maximum physical UDP payload
@@ -196,6 +184,11 @@ extern "C" {
  * Global maximum length for capability chain of custody (including initial issue)
  */
 #define ZT_MAX_CAPABILITY_CUSTODY_CHAIN_LENGTH 7
+
+/**
+ * Maximum number of multicast groups a device / network interface can be subscribed to at once
+ */
+#define ZT_MAX_MULTICAST_SUBSCRIPTIONS 1024
 
 /**
  * Maximum value for link quality (min is 0)
@@ -411,7 +404,7 @@ enum ZT_ResultCode
 	ZT_RESULT_ERROR_UNSUPPORTED_OPERATION = 1001,
 
 	/**
-	 * The requestion operation was given a bad parameter or was called in an invalid state
+	 * The requested operation was given a bad parameter or was called in an invalid state
 	 */
 	ZT_RESULT_ERROR_BAD_PARAMETER = 1002
 };
@@ -421,6 +414,35 @@ enum ZT_ResultCode
  * @return True if result code indicates a fatal error
  */
 #define ZT_ResultCode_isFatal(x) ((((int)(x)) >= 100)&&(((int)(x)) < 1000))
+
+/**
+ * The multipath algorithm in use by this node.
+ */
+enum ZT_MultipathMode
+{
+	/**
+	 * No active multipath.
+	 *
+	 * Traffic is merely sent over the strongest path. That being
+	 * said, this mode will automatically failover in the event that a link goes down.
+	 */
+	ZT_MULTIPATH_NONE = 0,
+
+	/**
+	 * Traffic is randomly distributed among all active paths.
+	 *
+	 * Will cease sending traffic over links that appear to be stale.
+	 */
+	ZT_MULTIPATH_RANDOM = 1,
+
+	/**
+	 * Traffic is allocated across all active paths in proportion to their strength and
+	 * reliability.
+	 *
+	 * Will cease sending traffic over links that appear to be stale.
+	 */
+	ZT_MULTIPATH_PROPORTIONALLY_BALANCED = 2,
+};
 
 /**
  * Status codes sent to status update callback when things happen
@@ -621,6 +643,24 @@ typedef struct
 } ZT_NodeStatus;
 
 /**
+ * Internal node statistics
+ *
+ * This structure is subject to change between versions.
+ */
+typedef struct
+{
+	/**
+	 * Number of each protocol verb (possible verbs 0..31) received
+	 */
+	uint64_t inVerbCounts[32];
+
+	/**
+	 * Number of bytes for each protocol verb received
+	 */
+	uint64_t inVerbBytes[32];
+} ZT_NodeStatistics;
+
+/**
  * Virtual network status codes
  */
 enum ZT_VirtualNetworkStatus
@@ -714,6 +754,11 @@ enum ZT_VirtualNetworkRuleType
 	 * Stop evaluating rule set (drops unless there are capabilities, etc.)
 	 */
 	ZT_NETWORK_RULE_ACTION_BREAK = 5,
+
+	/**
+	 * Place a matching frame in the specified QoS bucket
+	 */
+	ZT_NETWORK_RULE_ACTION_PRIORITY = 6,
 
 	/**
 	 * Maximum ID for an ACTION, anything higher is a MATCH
@@ -905,6 +950,11 @@ typedef struct
 			uint32_t flags;
 			uint16_t length;
 		} fwd;
+
+		/**
+		 * Quality of Service (QoS) bucket we want a frame to be placed in
+		 */
+		uint8_t qosBucket;
 	} v;
 } ZT_VirtualNetworkRule;
 
@@ -1038,7 +1088,8 @@ enum ZT_Architecture
 	ZT_ARCHITECTURE_SPARC64 = 12,
 	ZT_ARCHITECTURE_DOTNET_CLR = 13,
 	ZT_ARCHITECTURE_JAVA_JVM = 14,
-	ZT_ARCHITECTURE_WEB = 15
+	ZT_ARCHITECTURE_WEB = 15,
+	ZT_ARCHITECTURE_S390X = 16
 };
 
 /**
@@ -1134,6 +1185,19 @@ typedef struct
 	 * Routes (excluding those implied by assigned addresses and their masks)
 	 */
 	ZT_VirtualNetworkRoute routes[ZT_MAX_NETWORK_ROUTES];
+
+	/**
+	 * Number of multicast groups subscribed
+	 */
+	unsigned int multicastSubscriptionCount;
+
+	/**
+	 * Multicast groups to which this network's device is subscribed
+	 */
+	struct {
+		uint64_t mac; /* MAC in lower 48 bits */
+		uint32_t adi; /* Additional distinguishing information, usually zero except for IPv4 ARP groups */
+	} multicastSubscriptions[ZT_MAX_MULTICAST_SUBSCRIPTIONS];
 } ZT_VirtualNetworkConfig;
 
 /**
@@ -1186,6 +1250,56 @@ typedef struct
 	uint64_t trustedPathId;
 
 	/**
+	 * One-way latency
+	 */
+	float latency;
+
+	/**
+	 * How much latency varies over time
+	 */
+	float packetDelayVariance;
+
+	/**
+	 * How much observed throughput varies over time
+	 */
+	float throughputDisturbCoeff;
+
+	/**
+	 * Packet Error Ratio (PER)
+	 */
+	float packetErrorRatio;
+
+	/**
+	 * Packet Loss Ratio (PLR)
+	 */
+	float packetLossRatio;
+
+	/**
+	 * Stability of the path
+	 */
+	float stability;
+
+	/**
+	 * Current throughput (moving average)
+	 */
+	uint64_t throughput;
+
+	/**
+	 * Maximum observed throughput for this path
+	 */
+	uint64_t maxThroughput;
+
+	/**
+	 * Percentage of traffic allocated to this path
+	 */
+	float allocation;
+
+	/**
+	 * Name of physical interface (for monitoring)
+	 */
+	char *ifname;
+
+	/**
 	 * Is path expired?
 	 */
 	int expired;
@@ -1235,6 +1349,11 @@ typedef struct
 	 * Number of paths (size of paths[])
 	 */
 	unsigned int pathCount;
+
+	/**
+	 * Whether this peer was ever reachable via an aggregate link
+	 */
+	bool hadAggregateLink;
 
 	/**
 	 * Known network paths to peer
@@ -1462,7 +1581,7 @@ typedef int (*ZT_WirePacketSendFunction)(
 /**
  * Function to check whether a path should be used for ZeroTier traffic
  *
- * Paramters:
+ * Parameters:
  *  (1) Node
  *  (2) User pointer
  *  (3) ZeroTier address or 0 for none/any
@@ -1495,7 +1614,7 @@ typedef int (*ZT_PathCheckFunction)(
  *  (1) Node
  *  (2) User pointer
  *  (3) ZeroTier address (least significant 40 bits)
- *  (4) Desried address family or -1 for any
+ *  (4) Desired address family or -1 for any
  *  (5) Buffer to fill with result
  *
  * If provided this function will be occasionally called to get physical
@@ -1660,7 +1779,7 @@ ZT_SDK_API enum ZT_ResultCode ZT_Node_processBackgroundTasks(ZT_Node *node,void 
  * Join a network
  *
  * This may generate calls to the port config callback before it returns,
- * or these may be deffered if a netconf is not available yet.
+ * or these may be differed if a netconf is not available yet.
  *
  * If we are already a member of the network, nothing is done and OK is
  * returned.

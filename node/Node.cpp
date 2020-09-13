@@ -1,28 +1,15 @@
 /*
- * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (c)2019 ZeroTier, Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file in the project's root directory.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Change Date: 2023-01-01
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- * --
- *
- * You can be released from the requirements of the license by purchasing
- * a commercial license. Buying such a license is mandatory as soon as you
- * develop commercial closed-source software that incorporates or links
- * directly against ZeroTier software without disclosing the source code
- * of your own application.
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2.0 of the Apache License.
  */
+/****/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +53,7 @@ Node::Node(void *uptr,void *tptr,const struct ZT_Node_Callbacks *callbacks,int64
 {
 	if (callbacks->version != 0)
 		throw ZT_EXCEPTION_INVALID_ARGUMENT;
-	ZT_FAST_MEMCPY(&_cb,callbacks,sizeof(ZT_Node_Callbacks));
+	memcpy(&_cb,callbacks,sizeof(ZT_Node_Callbacks));
 
 	// Initialize non-cryptographic PRNG from a good random source
 	Utils::getSecureRandom((void *)_prngState,sizeof(_prngState));
@@ -76,6 +63,7 @@ Node::Node(void *uptr,void *tptr,const struct ZT_Node_Callbacks *callbacks,int64
 	memset(_expectingRepliesToBucketPtr,0,sizeof(_expectingRepliesToBucketPtr));
 	memset(_expectingRepliesTo,0,sizeof(_expectingRepliesTo));
 	memset(_lastIdentityVerification,0,sizeof(_lastIdentityVerification));
+	memset((void *)(&_stats),0,sizeof(_stats));
 
 	uint64_t idtmp[2];
 	idtmp[0] = 0; idtmp[1] = 0;
@@ -234,7 +222,7 @@ public:
 			}
 
 			if ((!contacted)&&(_bestCurrentUpstream)) {
-				const SharedPtr<Path> up(_bestCurrentUpstream->getBestPath(_now,true));
+				const SharedPtr<Path> up(_bestCurrentUpstream->getAppropriatePath(_now,true));
 				if (up)
 					p->sendHELLO(_tPtr,up->localSocket(),up->address(),_now);
 			}
@@ -268,6 +256,15 @@ ZT_ResultCode Node::processBackgroundTasks(void *tptr,int64_t now,volatile int64
 			Hashtable< Address,std::vector<InetAddress> > alwaysContact;
 			RR->topology->getUpstreamsToContact(alwaysContact);
 
+			// Uncomment to dump stats
+			/*
+			for(unsigned int i=0;i<32;i++) {
+				if (_stats.inVerbCounts[i] > 0)
+					printf("%.2x\t%12lld %lld\n",i,(unsigned long long)_stats.inVerbCounts[i],(unsigned long long)_stats.inVerbBytes[i]);
+			}
+			printf("\n");
+			*/
+
 			// Check last receive time on designated upstreams to see if we seem to be online
 			int64_t lastReceivedFromUpstream = 0;
 			{
@@ -279,6 +276,19 @@ ZT_ResultCode Node::processBackgroundTasks(void *tptr,int64_t now,volatile int64
 					if (p)
 						lastReceivedFromUpstream = std::max(p->lastReceive(),lastReceivedFromUpstream);
 				}
+			}
+
+			// Clean up any old local controller auth memorizations.
+			{
+				_localControllerAuthorizations_m.lock();
+				Hashtable< _LocalControllerAuth,int64_t >::Iterator i(_localControllerAuthorizations);
+				_LocalControllerAuth *k = (_LocalControllerAuth *)0;
+				int64_t *v = (int64_t *)0;
+				while (i.next(k,v)) {
+					if ((*v - now) > (ZT_NETWORK_AUTOCONF_DELAY * 3))
+						_localControllerAuthorizations.erase(*k);
+				}
+				_localControllerAuthorizations_m.unlock();
 			}
 
 			// Get peers we should stay connected to according to network configs
@@ -368,6 +378,7 @@ ZT_ResultCode Node::leave(uint64_t nwid,void **uptr,void *tptr)
 	{
 		Mutex::Lock _l(_networks_m);
 		SharedPtr<Network> *nw = _networks.get(nwid);
+		RR->sw->removeNetworkQoSControlBlock(nwid);
 		if (!nw)
 			return ZT_RESULT_OK;
 		if (uptr)
@@ -450,6 +461,7 @@ ZT_PeerList *Node::peers() const
 	for(std::vector< std::pair< Address,SharedPtr<Peer> > >::iterator pi(peers.begin());pi!=peers.end();++pi) {
 		ZT_Peer *p = &(pl->peers[pl->peerCount++]);
 		p->address = pi->second->address().toInt();
+		p->hadAggregateLink = 0;
 		if (pi->second->remoteVersionKnown()) {
 			p->versionMajor = pi->second->remoteVersionMajor();
 			p->versionMinor = pi->second->remoteVersionMinor();
@@ -465,15 +477,27 @@ ZT_PeerList *Node::peers() const
 		p->role = RR->topology->role(pi->second->identity().address());
 
 		std::vector< SharedPtr<Path> > paths(pi->second->paths(_now));
-		SharedPtr<Path> bestp(pi->second->getBestPath(_now,false));
+		SharedPtr<Path> bestp(pi->second->getAppropriatePath(_now,false));
+		p->hadAggregateLink |= pi->second->hasAggregateLink();
 		p->pathCount = 0;
 		for(std::vector< SharedPtr<Path> >::iterator path(paths.begin());path!=paths.end();++path) {
-			ZT_FAST_MEMCPY(&(p->paths[p->pathCount].address),&((*path)->address()),sizeof(struct sockaddr_storage));
+			memcpy(&(p->paths[p->pathCount].address),&((*path)->address()),sizeof(struct sockaddr_storage));
 			p->paths[p->pathCount].lastSend = (*path)->lastOut();
 			p->paths[p->pathCount].lastReceive = (*path)->lastIn();
 			p->paths[p->pathCount].trustedPathId = RR->topology->getOutboundPathTrust((*path)->address());
 			p->paths[p->pathCount].expired = 0;
 			p->paths[p->pathCount].preferred = ((*path) == bestp) ? 1 : 0;
+			p->paths[p->pathCount].latency = (float)(*path)->latency();
+			p->paths[p->pathCount].packetDelayVariance = (*path)->packetDelayVariance();
+			p->paths[p->pathCount].throughputDisturbCoeff = (*path)->throughputDisturbanceCoefficient();
+			p->paths[p->pathCount].packetErrorRatio = (*path)->packetErrorRatio();
+			p->paths[p->pathCount].packetLossRatio = (*path)->packetLossRatio();
+			p->paths[p->pathCount].stability = (*path)->lastComputedStability();
+			p->paths[p->pathCount].throughput = (*path)->meanThroughput();
+			p->paths[p->pathCount].maxThroughput = (*path)->maxLifetimeThroughput();
+			p->paths[p->pathCount].allocation = (float)(*path)->allocation() / (float)255;
+			p->paths[p->pathCount].ifname = (*path)->getName();
+
 			++p->pathCount;
 		}
 	}
@@ -619,6 +643,10 @@ std::vector<World> Node::moons() const
 
 void Node::ncSendConfig(uint64_t nwid,uint64_t requestPacketId,const Address &destination,const NetworkConfig &nc,bool sendLegacyFormatConfig)
 {
+	_localControllerAuthorizations_m.lock();
+	_localControllerAuthorizations[_LocalControllerAuth(nwid,destination)] = now();
+	_localControllerAuthorizations_m.unlock();
+
 	if (destination == RR->identity.address()) {
 		SharedPtr<Network> n(network(nwid));
 		if (!n) return;

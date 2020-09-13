@@ -1,28 +1,15 @@
 /*
- * ZeroTier One - Network Virtualization Everywhere
- * Copyright (C) 2011-2018  ZeroTier, Inc.  https://www.zerotier.com/
+ * Copyright (c)2019 ZeroTier, Inc.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file in the project's root directory.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Change Date: 2023-01-01
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- * --
- *
- * You can be released from the requirements of the license by purchasing
- * a commercial license. Buying such a license is mandatory as soon as you
- * develop commercial closed-source software that incorporates or links
- * directly against ZeroTier software without disclosing the source code
- * of your own application.
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2.0 of the Apache License.
  */
+/****/
 
 #ifndef ZT_UTILS_HPP
 #define ZT_UTILS_HPP
@@ -38,45 +25,11 @@
 #include <vector>
 #include <map>
 
-#include "Constants.hpp"
+#if defined(__FreeBSD__)
+#include <sys/endian.h>
+#endif
 
-#ifdef __LINUX__
-//#if (defined(_MSC_VER) || defined(__GNUC__)) && (defined(__amd64) || defined(__amd64__) || defined(__x86_64) || defined(__x86_64__) || defined(__AMD64) || defined(__AMD64__) || defined(_M_X64))
-#if 0
-#include <emmintrin.h>
-static inline void ZT_FAST_MEMCPY(void *a,const void *b,unsigned long k)
-{
-	char *aa = reinterpret_cast<char *>(a);
-	const char *bb = reinterpret_cast<const char *>(b);
-	while (k >= 64) {
-		__m128 t1 = _mm_loadu_ps(reinterpret_cast<const float *>(bb));
-		__m128 t2 = _mm_loadu_ps(reinterpret_cast<const float *>(bb + 16));
-		__m128 t3 = _mm_loadu_ps(reinterpret_cast<const float *>(bb + 32));
-		__m128 t4 = _mm_loadu_ps(reinterpret_cast<const float *>(bb + 48));
-		_mm_storeu_ps(reinterpret_cast<float *>(aa),t1);
-		_mm_storeu_ps(reinterpret_cast<float *>(aa + 16),t2);
-		_mm_storeu_ps(reinterpret_cast<float *>(aa + 32),t3);
-		_mm_storeu_ps(reinterpret_cast<float *>(aa + 48),t4);
-		bb += 64;
-		aa += 64;
-		k -= 64;
-	}
-	while (k >= 16) {
-		__m128 t1 = _mm_loadu_ps(reinterpret_cast<const float *>(bb));
-		_mm_storeu_ps(reinterpret_cast<float *>(aa),t1);
-		bb += 16;
-		aa += 16;
-		k -= 16;
-	}
-	for(unsigned long i=0;i<k;++i)
-		aa[i] = bb[i];
-}
-#else
-#define ZT_FAST_MEMCPY(a,b,c) memcpy(a,b,c)
-#endif
-#else
-#define ZT_FAST_MEMCPY(a,b,c) memcpy(a,b,c)
-#endif
+#include "Constants.hpp"
 
 namespace ZeroTier {
 
@@ -261,6 +214,14 @@ public:
 		return l;
 	}
 
+	static inline float normalize(float value, int64_t bigMin, int64_t bigMax, int32_t targetMin, int32_t targetMax)
+	{
+		int64_t bigSpan = bigMax - bigMin;
+		int64_t smallSpan = targetMax - targetMin;
+		float valueScaled = (value - (float)bigMin) / (float)bigSpan;
+		return (float)targetMin + valueScaled * (float)smallSpan;
+	}
+
 	/**
 	 * Generate secure random bytes
 	 *
@@ -411,8 +372,12 @@ public:
 	static inline uint64_t hton(uint64_t n)
 	{
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-#if defined(__GNUC__) && (!defined(__OpenBSD__))
+#if defined(__GNUC__)
+#if defined(__FreeBSD__)
+		return bswap64(n);
+#elif (!defined(__OpenBSD__))
 		return __builtin_bswap64(n);
+#endif
 #else
 		return (
 			((n & 0x00000000000000FFULL) << 56) |
@@ -440,8 +405,12 @@ public:
 	static inline uint64_t ntoh(uint64_t n)
 	{
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-#if defined(__GNUC__) && !defined(__OpenBSD__)
+#if defined(__GNUC__)
+#if defined(__FreeBSD__)
+		return bswap64(n);
+#elif (!defined(__OpenBSD__))
 		return __builtin_bswap64(n);
+#endif
 #else
 		return (
 			((n & 0x00000000000000FFULL) << 56) |
