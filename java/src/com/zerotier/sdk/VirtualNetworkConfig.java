@@ -56,6 +56,7 @@ public final class VirtualNetworkConfig implements Comparable<VirtualNetworkConf
     private long netconfRevision;
     private InetSocketAddress[] assignedAddresses;
     private VirtualNetworkRoute[] routes;
+    private VirtualNetworkDNS dns;
 
     private VirtualNetworkConfig() {
 
@@ -150,6 +151,13 @@ public final class VirtualNetworkConfig implements Comparable<VirtualNetworkConf
             }
         }
 
+        boolean dnsEquals = false;
+        if (this.dns == null || cfg.dns == null) {
+            dnsEquals = true;
+        } else if (this.dns != null) {
+            dnsEquals = this.dns.equals(cfg.dns);
+        }
+
         return this.nwid == cfg.nwid &&
                this.mac == cfg.mac &&
                this.name.equals(cfg.name) &&
@@ -161,6 +169,7 @@ public final class VirtualNetworkConfig implements Comparable<VirtualNetworkConf
                this.broadcastEnabled == cfg.broadcastEnabled &&
                this.portError == cfg.portError &&
                this.enabled == cfg.enabled &&
+               dnsEquals &&
                aaEqual && routesEqual;
     }
 
@@ -278,4 +287,6 @@ public final class VirtualNetworkConfig implements Comparable<VirtualNetworkConf
      * @return
      */
     public final VirtualNetworkRoute[] routes() { return routes; }
+
+    public final VirtualNetworkDNS dns() { return dns; }
 }
