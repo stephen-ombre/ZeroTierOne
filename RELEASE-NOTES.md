@@ -1,6 +1,12 @@
 ZeroTier Release Notes
 ======
 
+# 2021-02-02 -- Version 1.6.3
+
+ * Likely fix for GitHub issue #1334, an issue that could cause ZeroTier to
+   go into a "coma" on some networks.
+ * Also groundhog day
+
 # 2020-11-30 -- Version 1.6.2
 
  * Fix an ARM hardware AES crypto issue (not an exploitable vulnerability).
